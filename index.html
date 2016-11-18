@@ -1,0 +1,200 @@
+<!doctype html>
+<style>
+  .audio-output {
+    position: relative;
+    padding-top: 25%;
+    background: #45b35a;
+  }
+  .audio-output > * {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .loop {
+    background: rgba(255, 255, 255, 0.21);
+    width: 0;
+    border: 1px solid rgba(255, 255, 255, 0.41);
+    border-width: 0 1px;
+    box-sizing: border-box;
+    background-clip: content-box;
+  }
+  .play-head {
+    width: 1px;
+    background: #fff;
+  }
+</style>
+<button class="savant-phase">Change loop point</button>
+<div class="audio-output savant">
+  <canvas></canvas>
+  <div class="loop"></div>
+  <div class="play-head"></div>
+</div>
+<script>
+function createAsyncFunction(fn) {
+  return function () {
+    var gen = fn.apply(this, arguments);
+    return new Promise(function (resolve, reject) {
+      function step(key, arg) {
+        try {
+          var info = gen[key](arg);
+          var value = info.value;
+        } catch (error) {
+          reject(error);
+          return;
+        }
+        if (info.done) {
+          resolve(value);
+        } else {
+          return Promise.resolve(value).then(function (value) {
+            step("next", value);
+          }, function (err) {
+            step("throw", err);
+          });
+        }
+      }
+      return step("next");
+    });
+  };
+}
+
+function bufferFetch(url) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.responseType = 'arraybuffer';
+    xhr.onload = () => resolve(xhr.response); 
+    xhr.onerror = () => reject(Error('Fetch failed')); 
+    xhr.open('GET', url);
+    xhr.send();
+  });
+}
+
+function sampleToTime(buffer, sample) {
+  return sample / buffer.sampleRate;
+}
+
+function drawAudio(canvas, buffer) {
+  const resolution = 10;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.width * devicePixelRatio;
+  const context = canvas.getContext('2d');
+  const data = buffer.getChannelData(0);
+  context.fillStyle = '#7bf792';
+
+  for (let i = 0; i < canvas.width; i++) {
+    let max = -Infinity;
+    let min = Infinity;
+    const start = Math.floor(i / canvas.width * data.length);
+    const end = Math.floor((i+1) / canvas.width * data.length);
+    const interval = Math.floor((end - start) / resolution) || 1;
+
+    for (let j = start; j < end; j += interval) {
+      const item = data[j];
+      if (max < item) max = item;
+      if (min > item) min = item;
+    }
+
+    const height = (max - min) / 2 * canvas.height;
+    const startPixel = (1 - (max + 1) / 2) * canvas.height;
+
+    context.fillRect(i, startPixel, 1, height)
+  }
+}
+
+function drawLoop(el, start, width) {
+  el.style.left = start * 100 + '%';
+  el.style.width = width * 100 + '%';
+}
+
+function decodeAudio(context, arraybuffer) {
+  // Safari doesn't support promises in decodeAudioData :(
+  return new Promise((resolve, reject) => {
+    context.decodeAudioData(arraybuffer, resolve, reject);
+  });
+}
+
+createAsyncFunction(function*() {
+  const startOffset = 0.25;
+  const el = document.querySelector('.savant');
+  const loopEl = el.querySelector('.loop');
+  const context = new (self.AudioContext || self.webkitAudioContext)();
+  let buffer = yield decodeAudio(context, yield bufferFetch('starfish.mp4'));
+  const expectedLength = 2527517;
+
+  if (buffer.length > expectedLength) {
+    let oldBuffer = buffer;
+    buffer = context.createBuffer(2, expectedLength, 44100);
+    buffer.copyToChannel(oldBuffer.getChannelData(0).slice(oldBuffer.length - expectedLength), 0);
+    buffer.copyToChannel(oldBuffer.getChannelData(1).slice(oldBuffer.length - expectedLength), 1);
+  }
+
+  const samplePhases = [
+    {start: 0,       end: 421253},
+    {start: 842506,  end: 1263758},
+    {start: 1263758, end: 1474385},
+    {start: 1685011, end: 2106264},
+    {start: 2211577, end: 2422204},
+  ];
+
+  const phases = samplePhases.map(obj => ({
+    start: sampleToTime(buffer, obj.start),
+    end: sampleToTime(buffer, obj.end)
+  }));
+
+  let currentPhase = 0;
+
+  const source = context.createBufferSource();
+  source.buffer = buffer;
+  source.loop = true;
+  source.loopEnd = phases[currentPhase].end;
+  source.connect(context.destination);
+  source.start(startOffset);
+
+  (() => {
+    const playHead = el.querySelector('.play-head');
+    let lastTime = context.currentTime;
+    let posInTrack = context.currentTime - startOffset; 
+
+    function frame() {
+      const time = context.currentTime;
+      posInTrack += time - lastTime;
+      lastTime = time;
+
+      if (posInTrack > source.loopEnd) {
+        posInTrack = source.loopStart + (posInTrack - source.loopEnd);
+      }
+      const rect = el.getBoundingClientRect();
+      const pos = Math.max(posInTrack / buffer.duration, 0);
+      playHead.style.transform = `translate(${rect.width * pos}px, 0)`;
+      requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+  })();
+
+  drawAudio(el.querySelector('canvas'), buffer);
+  drawLoop(loopEl, phases[currentPhase].start / buffer.duration, (phases[currentPhase].end - phases[currentPhase].start) / buffer.duration);
+
+  document.querySelector('.savant-phase').addEventListener('click', () => {
+    currentPhase++;
+    if (currentPhase != phases.length) {
+      source.loopStart = phases[currentPhase].start;
+      source.loopEnd = phases[currentPhase].end;
+      drawLoop(loopEl, phases[currentPhase].start / buffer.duration, (phases[currentPhase].end - phases[currentPhase].start) / buffer.duration);
+      return;
+    }
+
+    currentPhase = 1;
+    source.loopStart = phases[currentPhase].start;
+    source.loopEnd = buffer.duration;
+    drawLoop(loopEl, phases[currentPhase].start / buffer.duration, buffer.duration);
+
+    setTimeout(() => {
+      source.loopEnd = phases[currentPhase].end;
+      drawLoop(loopEl, phases[currentPhase].start / buffer.duration, (phases[currentPhase].end - phases[currentPhase].start) / buffer.duration);
+    }, 7200);
+  });
+})();
+</script>
