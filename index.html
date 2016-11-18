@@ -116,7 +116,6 @@ function decodeAudio(context, arraybuffer) {
 }
 
 createAsyncFunction(function*() {
-  const startOffset = 0.25;
   const el = document.querySelector('.savant');
   const loopEl = el.querySelector('.loop');
   const context = new (self.AudioContext || self.webkitAudioContext)();
@@ -145,6 +144,7 @@ createAsyncFunction(function*() {
 
   let currentPhase = 0;
 
+  const startOffset = context.currentTime + 0.25;
   const source = context.createBufferSource();
   source.buffer = buffer;
   source.loop = true;
