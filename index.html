@@ -1,4 +1,5 @@
 <!doctype html>
+<meta name="viewport" content="width=device-width, minimum-scale=1.0">
 <style>
   .audio-output {
     position: relative;
@@ -23,6 +24,7 @@
   .play-head {
     width: 1px;
     background: #fff;
+    will-change: transform;
   }
 </style>
 <button class="savant-phase">Change loop point</button>
@@ -70,10 +72,6 @@ function bufferFetch(url) {
   });
 }
 
-function sampleToTime(buffer, sample) {
-  return sample / buffer.sampleRate;
-}
-
 function drawAudio(canvas, buffer) {
   const resolution = 10;
   const rect = canvas.getBoundingClientRect();
@@ -115,19 +113,26 @@ function decodeAudio(context, arraybuffer) {
   });
 }
 
+function trimStartToDuration(context, buffer, expectedDuration) {
+  const expectedLength = expectedDuration * buffer.sampleRate;
+
+  if (buffer.length <= expectedLength) {
+    return buffer;
+  }
+
+  const newBuffer = context.createBuffer(2, expectedLength, buffer.sampleRate);
+  newBuffer.copyToChannel(buffer.getChannelData(0).slice(buffer.length - expectedLength), 0);
+  newBuffer.copyToChannel(buffer.getChannelData(1).slice(buffer.length - expectedLength), 1);
+  return newBuffer;
+}
+
 createAsyncFunction(function*() {
   const el = document.querySelector('.savant');
   const loopEl = el.querySelector('.loop');
   const context = new (self.AudioContext || self.webkitAudioContext)();
   let buffer = yield decodeAudio(context, yield bufferFetch('starfish.mp4'));
-  const expectedLength = 2527517;
-
-  if (buffer.length > expectedLength) {
-    let oldBuffer = buffer;
-    buffer = context.createBuffer(2, expectedLength, 44100);
-    buffer.copyToChannel(oldBuffer.getChannelData(0).slice(oldBuffer.length - expectedLength), 0);
-    buffer.copyToChannel(oldBuffer.getChannelData(1).slice(oldBuffer.length - expectedLength), 1);
-  }
+  const expectedDuration = 57.313310657596375;
+  buffer = trimStartToDuration(context, buffer, expectedDuration);
 
   const samplePhases = [
     {start: 0,       end: 421253},
@@ -138,8 +143,8 @@ createAsyncFunction(function*() {
   ];
 
   const phases = samplePhases.map(obj => ({
-    start: sampleToTime(buffer, obj.start),
-    end: sampleToTime(buffer, obj.end)
+    start: obj.start / 44100,
+    end: obj.end / 44100
   }));
 
   let currentPhase = 0;
